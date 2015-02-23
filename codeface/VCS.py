@@ -51,6 +51,7 @@ from progressbar import ProgressBar, Percentage, Bar, ETA
 from ctags import CTags, TagEntry
 from logging import getLogger
 from codeface.linktype import LinkType
+from git import Repo
 
 log = getLogger(__name__)
 from .util import execute_command
@@ -94,6 +95,7 @@ class VCS:
         self.rev_start     = None;
         self.rev_end       = None;
         self.repo          = None
+        self.gitpython     = None
 
         # Get commit ranges using dates
         # True: get list of commits made between revision date range
@@ -149,6 +151,7 @@ class VCS:
 
     def setRepository(self, repo):
         self.repo = repo
+        self.gitpython = Repo.init(repo, bare=True)
 
     def setRevisionRange(self, rev_start, rev_end):
         self.rev_start = rev_start
@@ -1002,56 +1005,6 @@ class gitVCS (VCS):
 
         return self._commit_list_dict[subsys]
 
-
-    def _getBlameMsg(self, fileName, rev):
-        '''provided with a filename and revision the function returns
-        the blame message'''
-
-        #build command string
-        cmd = 'git --git-dir={0} blame'.format(self.repo).split()
-        cmd.append("-p") #format for machine consumption
-        cmd.append("-w") #ignore whitespace changes
-        cmd.append("-C") #find copied code (attribute to original)
-        cmd.append("-M") #find moved code (attribute to original)
-        cmd.append(rev)
-        cmd.append("--")
-        cmd.append(fileName)
-
-        #query git repository
-        blameMsg = execute_command(cmd).splitlines()
-
-        return blameMsg
-
-
-    def _parseBlameMsg(self, msg):
-        '''input a blame msg and the commitID under examination the
-        output contains code line numbers and corresponding commitID'''
-
-        #variable declarations
-        commitLineDict = {} #dictionary, key is line number, value is commit ID
-        codeLines      = [] # list of source code lines
-
-        while msg:
-
-            line = msg.pop(0).split(" ")
-
-            #the lines we want to match start with a commit hash
-            if(self.cmtHashPattern.match( line[0] ) ):
-
-               lineNum    = str(int(line[2]) - 1)
-               commitHash = line[0]
-
-               commitLineDict[lineNum] = commitHash
-
-            # check for line of code, signaled by a tab character
-            elif line[0].startswith('\t'):
-               line[0] = line[0][1:] # remove tab character
-               codeLines.append(' '.join(line) + '\n')
-
-
-        return (commitLineDict, codeLines)
-
-
     def _prepareFileCommitList(self, fnameList, link_type, singleBlame=True,
                                ignoreOldCmts=True):
         '''
@@ -1123,28 +1076,23 @@ class gitVCS (VCS):
             if self.range_by_date:
                 #Find the revision where the last change was applied up until the
                 #the end of the analysis time window specified by a date
-                cmd = 'git --git-dir={0} log'.format(self.repo).split()
-                cmd.append("--until={0}".format(self.rev_end_date))
-                cmd.append("--format=%H")
-                cmd.append("--follow")
-                cmd.append("--diff-filter=ACMRTB")
-                cmd.append("-1")
-                cmd.append("--")
-                cmd.append(file_commit.filename)
-                rev = execute_command(cmd).strip()
+                revs = self.gitpython.blame(self.rev_end,
+                                            file_commit.filename)
+                commit, _ = max(revs, key=(lambda (c, lns): c.cdate))
+                rev = str(commit)
             else:
                 #Use revision that represents the final commit for the specified
                 #revision range
                 rev = self.rev_end
 
             # Check if file has been deleted
-            cmd = "git --git-dir={0} ls-tree".format(self.repo).split()
-            cmd.append("--name-only")
-            cmd.append("--full-tree")
-            cmd.append("-r")
-            cmd.append(rev)
-            existing_files = execute_command(cmd).split()
-            if file_commit.filename in existing_files:
+            def exists_file(filename):
+                try:
+                    self.gitpython.commit(rev).tree[filename]
+                    return True
+                except KeyError:
+                    return False
+            if exists_file(file_commit.filename):
                 # retrieve blame data
                 if singleBlame: #only one set of blame data per file
                     self._addBlameRev(rev, file_commit,
@@ -1211,16 +1159,15 @@ class gitVCS (VCS):
         blame_cmt_ids: a list to keep track of all commit ids seen in the blame
         '''
 
-        #query git reppository for blame message
-        blameMsg = self._getBlameMsg(file_commit.filename, rev)
-
-        #parse the blame message, this extracts the line number
-        #and corresponding commit hash, returns a dictionary
-        #Key = line number, value = commit hash
-        #basically a snapshot of what the file looked like
-        #at the time of the commit
-        (cmt_lines, src_lines) = self._parseBlameMsg(blameMsg)
-
+        blame_data = self.gitpython.blame(rev, file_commit.filename)
+        cmt_lines = {}
+        src_lines = []
+        i = 0
+        for commit, lines in blame_data:
+            for line in lines:
+                cmt_lines[str(i)] = str(commit)
+                src_lines.append(str(line) + "\n")
+                i += 1
         #store the dictionary to the fileCommit Object
         file_commit.addFileSnapShot(rev, cmt_lines)
 
@@ -1398,12 +1345,38 @@ class gitVCS (VCS):
 
         #query git to get all committers to a particular file
         #includes commit hash, author and committer data and time
-        logMsg = self._getFileCommitInfo(fname, rev_start, rev_end)
+        #logMsg = self._getFileCommitInfo(fname, rev_start, rev_end)
+        raw_commits = list(self.gitpython.iter_commits(
+            "{0}..{1}".format(rev_start, rev_end)))
+        def map_commit(raw_commit):
+            cmt = commit.Commit()
+            cmt.cdate = raw_commit.committed_date
+            cmt.id = str(raw_commit)
+            cmt.adate = raw_commit.authored_date
 
+            total_minutes = raw_commit.author_tz_offset / 60
+            minutes = total_minutes % 60 if total_minutes > 0 \
+                else -total_minutes % 60
+            simple_format = ((total_minutes / 60) * 100) + \
+                            (minutes if total_minutes > 0 else -minutes)
+            cmt.adate_tz = -simple_format
+            return cmt
+
+        def filter_commit(raw_commit):
+            diff = raw_commit.diff(raw_commit.parents[0])
+            for change in diff:
+                names = [blob.path
+                         for blob in (change.a_blob, change.b_blob)
+                         if blob is not None]
+                if fname in names:
+                    return True
+            return False
+
+        cmt_list = [map_commit(c) for c in raw_commits if filter_commit(c)]
         #store the commit hash to the fileCommitList
-        cmtList = map(self._Logstring2Commit, logMsg)
+        #cmt_list = map(self._Logstring2Commit, logMsg)
 
-        return cmtList
+        return sorted(cmt_list, key=(lambda c: c.cdate), reverse=True)
 
     def addFiles4Analysis(self, cmt_id_list):
         '''
