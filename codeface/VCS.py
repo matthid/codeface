@@ -523,20 +523,21 @@ class gitVCS (VCS):
         # lists.
         for subsys in self.subsys_description.keys():
             clist = self._getCommitIDsLL(self.rev_start, self.rev_end,
-                                         self.subsys_description[subsys])
-
+                                         self.subsys_description[subsys],
+                                         sort_reverse=False)
+            commit_list = \
+                [self._Logstring2ID(logstring)
+                 for logstring in clist]
             # Based on this information, prepare a list of commit.Commit
             # objects
             self._commit_list_dict[subsys] = \
-                [self._commit_dict[self._Logstring2ID(logstring)]
-                 for logstring in reversed(clist)]
+                [self._commit_dict[c]
+                 for c in commit_list]
 
             # For the subsystems, we also prepare lists of "raw" IDs
             # that are required for the subsystem identification
             # pass (NOTE: There are some optimisation opportunities here)
-            self._commit_id_list_dict[subsys] = \
-                [self._Logstring2ID(logstring)
-                 for logstring in reversed(clist)]
+            self._commit_id_list_dict[subsys] = commit_list
 
         # Finally, we also create commit ID lists for ranges of
         # interest (currently, only to decide whether a commit is in
@@ -545,9 +546,10 @@ class gitVCS (VCS):
             for range in self._rc_ranges:
                 clist = self._getCommitIDsLL(range[0], range[1])
                 self._rc_id_list.extend([self._Logstring2ID(logstring)
-                                          for logstring in clist])
+                                         for logstring in clist])
 
-    def _getCommitIDsLL(self, rev_start, rev_end, dir_list=None):
+    def _getCommitIDsLL(self, rev_start, rev_end, dir_list=None,
+                        sort_reverse=True):
         """Low-level routine to extract the commit list from the VCS.
 
         Input:
@@ -595,7 +597,7 @@ class gitVCS (VCS):
         # of commits can violate this for various reasons. Since these
         # outliers screw up the cumulative graph, we have to add an
         # extra sorting pass.
-        clist.sort(reverse=True)
+        clist.sort(reverse=sort_reverse)
 
         return clist
 
@@ -1094,10 +1096,9 @@ class gitVCS (VCS):
         pbar = ProgressBar(widgets=widgets,
                            maxval=len(fnameList)).start()
 
+        pbar.update(0)
+
         for fname in fnameList:
-            count += 1
-            if count % 20 == 0:
-                pbar.update(count)
 
             #create fileCommit object, one per filename to be
             #stored in _fileCommit_dict
@@ -1159,6 +1160,9 @@ class gitVCS (VCS):
                 #store fileCommit object to dictionary
                 self._fileCommit_dict[fname] = file_commit
 
+            count += 1
+            if count % 20 == 0:
+                pbar.update(count)
         #end for fnameList
         pbar.finish()
 
