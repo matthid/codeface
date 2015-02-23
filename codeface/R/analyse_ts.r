@@ -677,7 +677,9 @@ do.sloccount.analysis <- function(conf, pid) {
     ## The plot id has already been created in complexity.r
     plot.id <- get.plot.id(conf, "sloccount")
     dat <- query.sloccount.ts(conf$con, plot.id)
-
+    if (nrow(dat) == 0) {
+      return(NULL)
+    }
     for (type in c("person.months", "total.cost", "schedule.months",
                    "avg.devel")) {
         res <- process.sloccount.ts(conf$con, pid, dat, type)
