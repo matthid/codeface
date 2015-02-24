@@ -158,7 +158,9 @@ class EndToEndTestSetup(unittest.TestCase):
                 res,
                 msg="Project edgelist is incorrect for the v{}_release "
                     "to v{}_release analysis!"
-                .format(i, i+1))
+                    "Expected edges: {}"
+                    "Actual edges: {}"
+                .format(i, i+1, correct_edges, test_edges))
     
     def mlEndToEnd(self):
         save_argv = sys.argv
