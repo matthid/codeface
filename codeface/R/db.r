@@ -34,6 +34,21 @@ get.project.id <- function(con, name) {
   return(res$id)
 }
 
+get.project.id.from.release.range.id <- function(con, range.id) {
+  res <- dbGetQuery(con, str_c("SELECT projectId FROM release_range WHERE id=", range.id))
+  return(res$projectId)
+}
+
+get.cycle.from.release.range.id <- function(con, range.id) {
+  res <- dbGetQuery(con, str_c("SELECT cycle FROM revisions_view WHERE releaseRangeID=", range.id))
+  return(res$cycle)
+}
+
+get.project.from.project.id <- function(con, project.id) {
+  res <- dbGetQuery(con, str_c("SELECT * FROM project WHERE id=", project.id))
+  return(res)
+}
+
 ## Determine the ID of a given plot for a given project. Since
 ## plots are not created in parallel, we need no locking.
 ## Also, clear the plot for new data. This function is supposed to be
@@ -305,6 +320,7 @@ connect.db <- function(conf.file) {
 ## computes a local graph representation
 get.graph.data.local <- function(con, p.id, range.id, cluster.method=NULL) {
   g.id <- query.global.collab.con(con, p.id, range.id, cluster.method)
+  if (is.null(g.id)) stop(str_c("no graph was found for project ", p.id, " and range ", range.id, "."))
   edgelist.db <- query.cluster.edges(con, g.id)
   v.global.ids <- query.cluster.members(con, g.id)
 
@@ -331,7 +347,7 @@ get.graph.data.local <- function(con, p.id, range.id, cluster.method=NULL) {
 
   res <- list(edgelist=edgelist, v.global.ids=v.global.ids,
               v.local.ids=v.local.ids, id.map=id.map, comm=local.comm$comm,
-              rank=local.comm$rank)
+              rank=local.comm$rank, edgelist.db=edgelist.db)
 
   return(res)
 }
